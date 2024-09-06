@@ -1,0 +1,252 @@
+```{r}
+library(tidyverse)
+library(nflreadr)
+library(ggplot2)
+library(corrplot)
+```
+
+
+```{r}
+full_contract_data = load_contracts()
+full_contract_data <- full_contract_data |> 
+  mutate(draftposition = as.integer(paste(as.character(draft_year), as.character(draft_overall), sep = "")))
+```
+
+
+```{r}
+contract_data_sheared = full_contract_data |>
+  subset(select = -c(is_active, inflated_value, inflated_apy, inflated_guaranteed, player_page, otc_id, date_of_birth, height, weight, college, draft_round, draft_team, cols))
+```
+
+
+
+```{r}
+fifthyr_eligibles_final <- read_csv("fifthyrs_final.csv")
+fifthyr_eligibles_final <- fifthyr_eligibles_final |>
+  mutate(year_signed = draft_year + 1)
+```
+
+
+```{r}
+complete_contract_data <- rbind(contract_data_sheared, fifthyr_eligibles_final)
+complete_contract_data <- complete_contract_data |> 
+  mutate(player = ifelse(player == "Josh Allen" & draft_year == 2019, 
+                            "Joshua Hines-Allen", 
+                            player)) |>
+  mutate(player = ifelse(player == "Josh Allen" & draft_year == 2014, 
+                            "Josh N. Allen", 
+                            player))
+```
+
+
+```{r}
+abbreviations = read_csv("team_abbreviations.csv")
+```
+```{r}
+transfer_abbreviation <- function(abbr){
+  filtered_abbrs <- abbreviations |> 
+    filter(abbreviation == abbr)
+  return (pull(filtered_abbrs[1, 1]))
+}
+```
+
+
+```{r}
+contract_years <- complete_contract_data |> 
+  group_by(player, year_signed) |> 
+  slice(1) |>
+  arrange(year_signed) |> 
+  drop_na(years) |>
+  ungroup() |>
+  group_by(player) |>
+  uncount(weights = years, .remove = FALSE) |>
+  mutate(year_index = 1: n(), year = draft_year + (year_index - 1)) |>
+  ungroup() |>
+  drop_na(year) |>
+  filter(year_signed >= 1983)
+contract_years |> filter(player == "Josh Allen")
+``` 
+
+
+```{r}
+roster_years <- c(1983:2024)
+master_rosters <- load_rosters(1983)
+```
+
+
+```{r}
+for (year in roster_years){
+  new_year_rosters <- load_rosters(year)
+  master_rosters <- rbind(master_rosters, new_year_rosters, fill = TRUE)
+}
+```
+
+
+
+```{r}
+master_rosters <- master_rosters |>
+  filter(!is.na(team)) |> 
+  mutate(full_name = ifelse(full_name == "Odell Beckham", 
+                            "Odell Beckham Jr.", 
+                            full_name)) |>
+  mutate(full_name = ifelse(full_name == "Josh Allen" & college == "Kentucky", 
+                            "Joshua Hines-Allen", 
+                            full_name)) |>
+  mutate(full_name = ifelse(full_name == "Josh Allen" & college == "Louisiana-Monroe", 
+                            "Josh N. Allen", 
+                            full_name))
+```
+
+```{r}
+length(master_rosters$team)
+```
+
+
+
+```{r}
+team_list = c()
+for (item in 1:93366){
+  transferred_abbr <- transfer_abbreviation(master_rosters$team[item])
+  team_list <- append(team_list, transferred_abbr)
+}
+```
+
+
+```{r}
+master_rosters$team <- team_list
+```
+
+
+
+```{r}
+stint_durations <- master_rosters |> 
+  subset(select = c(full_name, season, team, college)) |>
+  filter(!is.na(college)) |>
+  group_by(full_name, college) |>
+  mutate(year_index = 1:n(), 
+         prev_year_team = lag(team),
+         next_year_team = lead(team),
+         is_first_year = (team != prev_year_team) | year_index == 1,
+         is_last_year = (team != next_year_team) | year_index == n(),
+         start_of_stint = (is_first_year == TRUE),
+         end_of_stint = (is_last_year == TRUE),
+         stint_start = ifelse(is_first_year == TRUE, season, NA)) |>
+  fill(stint_start) |>
+  mutate(stint_duration = ifelse(is_last_year == TRUE, 
+                                 (season-stint_start)+1, 
+                                 NA)) |>
+  ungroup() |>
+  filter(end_of_stint == TRUE)
+```
+
+
+
+```{r}
+get_true_stint_duration <- function(player, start_year){
+  player_stint <- stint_durations |> filter(full_name == player, stint_start == start_year)
+  return (player_stint$stint_duration[1])
+}
+```
+
+```{r}
+get_true_stint_duration("Aaron Rodgers", 2005)
+```
+
+
+
+```{r}
+contract_stinting <- contract_years |> 
+  group_by(player, position) |>
+  arrange(year_signed) |> 
+  mutate(year_index = 1:n(), 
+         prev_year_team = lag(team),
+         next_year_team = lead(team),
+         is_first_year = (team != prev_year_team) | year_index == 1,
+         is_last_year = (team != next_year_team) | year_index == n(),
+         start_of_stint = (is_first_year == TRUE),
+         end_of_stint = (is_last_year == TRUE),
+         stint_start = ifelse(is_first_year == TRUE, year_signed, NA)) |>
+  fill(stint_start) |>
+  mutate(stint_duration = ifelse(is_last_year == TRUE, 
+                                 (year-stint_start)+1, 
+                                 NA)) |>
+  arrange(desc(year)) |>
+  fill(stint_duration) |>
+  arrange(year) |>
+  ungroup()
+```
+
+```{r}
+length(contract_stinting$player)
+```
+
+
+```{r}
+true_stint_durations = c()
+for (index in 1:57251){
+  player_name <- contract_stinting$player[index]
+  stint_start_yr <- contract_stinting$stint_start[index]
+  true_duration = get_true_stint_duration(player_name, stint_start_yr)
+  true_stint_durations <- append(true_stint_durations, true_duration)
+}
+
+```
+
+```{r}
+contract_stinting$true_stint_durations <- true_stint_durations
+final_contract_years <- contract_stinting |>
+  group_by(player, stint_start) |>
+  arrange(year) |>
+  mutate(stint_index = 1:n(), true_year = stint_start + (stint_index - 1)) |>
+  filter(is.na(true_stint_durations) | (true_stint_durations >= stint_index)) |>
+  group_by(player, position) |>
+  arrange(desc(year_index)) |>
+  filter(!(duplicated(true_year))) |>
+  arrange(year) |>
+  ungroup()
+```
+
+```{r}
+final_contract_years_sheared <- final_contract_years |> subset(select = c(player, position, value, 
+                                          apy, guaranteed, apy_cap_pct,
+                                          draft_year, true_year)) |>
+  group_by(player, position, draft_year) |>
+  arrange(true_year) |>
+  mutate(exp = (true_year - draft_year) + 1) |>
+  ungroup() |> 
+  rename(season = true_year)
+  
+```
+
+
+
+```{r}
+rosters_sheared <- master_rosters |> 
+  subset(select = c(season, team, full_name, entry_year)) |>
+  group_by(full_name, entry_year) |>
+  arrange(season) |>
+  mutate(exp = (season - entry_year) + 1) |>
+  ungroup() |>
+  rename(player = full_name, draft_year = entry_year)
+```
+
+```{r}
+year_by_year_data <- inner_join(rosters_sheared, final_contract_years_sheared,
+                                by = join_by(season, player, draft_year))
+```
+```{r}
+year_by_year_data <- year_by_year_data |> 
+  mutate(position = ifelse(player == "Jalen Ramsey", "CB", position)) |>
+  mutate(position = ifelse(player == "Minkah Fitzpatrick", "S", position))
+
+  
+```
+
+```{r}
+team_season_data <- year_by_year_data |>
+  group_by(team, season, position) |>
+  summarize(total_cap_dollars = sum(apy), total_cap_pct = sum(apy_cap_pct))
+```
+
+
+

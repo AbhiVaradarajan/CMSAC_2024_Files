@@ -1,0 +1,135 @@
+```{r}
+get_market_average <- function(id){
+  filtered_market = new_market_averages |> filter(position_season_id == id)
+  return(filtered_market$market_average[1])
+}
+```
+
+
+
+```{r}
+new_market_averages <- year_by_year_data |>
+  subset(select = -c(exp.y)) |>
+  rename(exp = exp.x) |>
+  filter(!(position == "__")) |>
+  mutate(position_season_id = as.character(paste(position, as.character(season), sep = ""))) |>
+  group_by(position_season_id) |>
+  arrange(desc(apy_cap_pct)) |>
+  slice(3:25) |> 
+  summarize(market_average = mean(apy_cap_pct))
+```
+
+
+```{r}
+rookie_comparisons <- year_by_year_data |>
+  filter(!(position == "__")) |>
+  subset(select = -c(exp.y)) |>
+  rename(exp = exp.x) |>
+  group_by(player) |>
+  mutate(on_rookie_deal = ifelse(exp <= 4, 1, 0),
+         position_season_id = as.character(paste(position, as.character(season), sep = ""))) |>
+  arrange(season) |>
+  ungroup() |>
+  filter(season >= 2002)
+```
+
+
+```{r}
+market_avg_list <- lapply(rookie_comparisons$position_season_id, get_market_average)
+```
+
+```{r}
+length(market_avg_list)
+```
+
+```{r}
+market_avg_appender <- c()
+for (item in 1: 32928){
+  market_avg_appender <- append(market_avg_appender, market_avg_list[[item]])
+}
+```
+
+```{r}
+rookie_comparisons$market_avg <- market_avg_appender
+```
+
+```{r}
+rookie_comparisons <- rookie_comparisons |>
+  group_by(position) |>
+  arrange(desc(season)) |>
+  fill(market_avg) |>
+  ungroup()
+```
+
+```{r}
+rookie_value_charting <- rookie_comparisons |>
+  mutate(value_rating = ifelse((exp == 6 & apy_cap_pct >= market_avg), apy_cap_pct - market_avg, NA)) |>
+  group_by(player) |>
+  arrange(desc(value_rating)) |>
+  fill(value_rating) |>
+  ungroup()
+  
+```
+
+```{r}
+summarized_rookie_value_ratings <- rookie_value_charting |>
+  mutate(team_season_id = paste(team, as.character(season), sep = "")) |>
+  mutate(valued_rookie_rating = ifelse(exp <= 4, value_rating, 0)) |>
+  mutate(valued_rookie_rating = ifelse(is.na(valued_rookie_rating), 0, valued_rookie_rating)) |>
+  group_by(team_season_id) |>
+  summarize(surplus_value_rating = sum(valued_rookie_rating))
+```
+
+
+```{r}
+master_epa_table <- master_epa_table |>
+  filter(!is.na(offensive_epa_per_play))
+```
+
+
+
+```{r}
+rookie_value_comparisons <- inner_join(summarized_rookie_value_ratings, 
+                                     master_epa_table,
+                                     by = join_by(team_season_id))
+```
+
+
+
+```{r}
+modeling_rookies <- rookie_value_comparisons |>
+  filter(season < 2021 & season > 2010) |>
+  mutate(cumulative_epa = (offensive_epa_per_play + defensive_epa_per_play)/2)
+surplus_value_model <- lm(cumulative_epa~surplus_value_rating, data = modeling_rookies)
+summary(surplus_value_model)
+```
+
+```{r}
+rookie_value_comparisons |>
+  filter(season < 2021 & season > 2010) |>
+  mutate(cumulative_epa = (offensive_epa_per_play + defensive_epa_per_play)/2) |>
+  ggplot(aes(x = surplus_value_rating, y = cumulative_epa))+
+  geom_point()+
+  geom_smooth(method = lm)+
+  labs(x = "Total Surplus Value", y = "Cumulative EPA", title = "Total Surplus Value vs. Cumulative EPA per Play")
+  
+```
+
+```{r}
+rookie_value_charting |>
+  mutate(valued_rookie_rating = ifelse(exp <= 4, value_rating, 0)) |>
+  filter(exp <= 4, value_rating > 0) |>
+  filter(season < 2021 & season > 2011) |>
+  group_by(season, position) |> 
+  filter(!(position %in% special_teams), !(position == "FB")) |>
+  summarize(average_seasonal_surplus_value = mean(valued_rookie_rating)) |>
+  ggplot(aes(x = season, y = average_seasonal_surplus_value, fill = position))+
+  geom_area(position = "fill", color = "black")+
+  labs(x = "Season", y = "Average Surplus Value Rating", 
+       title = "Distribution of Surplus Value Rating by Position per Season")+
+  scale_fill_manual(values = c("red", "blue", "orange", "brown4", "darkorchid", 
+                               "darksalmon", "chartreuse", "cyan", "darkgreen", 
+                               "darkgray", "green", "deeppink", "darkblue", "chocolate"))
+```
+
+

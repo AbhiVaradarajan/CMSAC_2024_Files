@@ -1,0 +1,202 @@
+```{r}
+master_records <- load_schedules() |> 
+  filter(game_type == "REG", season >= 2002) 
+master_records$home_team <- lapply(master_records$home_team, transfer_abbreviation)
+master_records$away_team <- lapply(master_records$away_team, transfer_abbreviation)
+master_records <- master_records|>
+  subset(select = c(season, game_type, home_team, away_team, home_score, away_score)) |>
+  mutate(winner = ifelse(home_score > away_score, home_team, away_team), 
+         team_season_id = paste(winner, as.character(season), sep = "")) |>
+  group_by(team_season_id) |>
+  summarize(wins = n(), losses = ifelse(season >= 2021, 17-wins, 16-wins)) |>
+  group_by(team_season_id) |>
+  slice(1) |>
+  ungroup()
+
+browns_2017 <- data.frame("Browns2017", 0, 16)
+names(browns_2017) <- c("team_season_id", "wins", "losses")
+
+master_records <- rbind(master_records, browns_2017)
+```
+
+```{r}
+get_wins <- function(spec_team_season_id){
+  specific_record <- master_records |> filter(team_season_id == spec_team_season_id)
+  return (specific_record$wins[[1]])
+}
+```
+
+```{r}
+get_losses <- function(spec_team_season_id){
+  specific_record <- master_records |> filter(team_season_id == spec_team_season_id)
+  return (specific_record$losses[[1]])
+}
+```
+
+
+```{r}
+create_offensive_epa_table <- function(year){
+  year_table <- load_pbp(year) |> subset(select = c(home_team, away_team, posteam, posteam_type, defteam, play_type, epa, penalty)) |>
+  rename(offense_team = posteam, defense_team = defteam) |>
+  filter(!is.na(offense_team), !is.na(defense_team)) |>
+  mutate(offensive_epa = epa, defensive_epa = -(epa)) |>
+  filter(penalty != 1) |>
+  group_by(offense_team) |>
+  summarize(offensive_epa_per_play = mean(offensive_epa), season = year) |>
+  arrange(desc(offensive_epa_per_play))
+  return (year_table)
+}
+```
+
+```{r}
+create_defensive_epa_table <- function(year){
+  year_table <- load_pbp(year) |> subset(select = c(home_team, away_team, posteam, posteam_type, defteam, play_type, epa, penalty)) |>
+  rename(offense_team = posteam, defense_team = defteam) |>
+  filter(!is.na(offense_team), !is.na(defense_team), !is.na(epa)) |>
+  mutate(offensive_epa = epa, defensive_epa = -(epa)) |>
+  filter(penalty != 1) |>
+  group_by(defense_team) |>
+  summarize(defensive_epa_per_play = mean(defensive_epa), season = year) |>
+  arrange(desc(defensive_epa_per_play))
+  return (year_table)
+}
+```
+
+
+```{r}
+get_team_offensive_epa = function(team_yr_id){
+  team_season <- master_epa_table |> filter(team_season_id == team_yr_id)
+  return (team_season$offensive_epa_per_play[1])
+}
+```
+
+```{r}
+get_team_defensive_epa = function(team_yr_id){
+  team_season <- master_epa_table |> filter(team_season_id == team_yr_id)
+  return (team_season$defensive_epa_per_play[1])
+}
+```
+
+
+
+```{r}
+master_offensive_epa <- create_offensive_epa_table(2002)
+```
+
+
+```{r}
+for (year in 2003:2023){
+  year_off_table <- create_offensive_epa_table(year)
+  master_offensive_epa <- rbind(master_offensive_epa, year_off_table)
+}
+```
+
+
+```{r}
+master_defensive_epa <- create_defensive_epa_table(2002)
+```
+
+```{r}
+for (year in 2003:2023){
+  year_def_table <- create_defensive_epa_table(year)
+  master_defensive_epa <- rbind(master_defensive_epa, year_def_table)
+}
+```
+
+```{r}
+master_offensive_epa <- master_offensive_epa |>
+  rename(team = offense_team)
+master_defensive_epa <- master_defensive_epa |>
+  rename(team = defense_team)
+```
+
+
+
+```{r}
+master_epa_table <- inner_join(master_offensive_epa, 
+                               master_defensive_epa, 
+                               by = join_by(team, season))
+```
+
+```{r}
+master_epa_table$team <- lapply(master_epa_table$team, transfer_abbreviation)
+
+```
+
+```{r}
+master_epa_table <- master_epa_table |>
+  mutate(team_season_id = paste(team, as.character(season), sep = ""))
+```
+
+
+
+```{r}
+team_season_data_final <- team_season_data |>
+  filter(season >= 2002, season < 2024) |>
+  mutate(team_season_id = paste(team, as.character(season), sep = ""))
+head(team_season_data_final)
+```
+
+```{r}
+team_season_data_final$offensive_epa = lapply(team_season_data_final$team_season_id, 
+                                              get_team_offensive_epa)
+team_season_data_final$defensive_epa = lapply(team_season_data_final$team_season_id, 
+                                              get_team_defensive_epa)
+```
+
+
+```{r}
+length(team_season_data_final$offensive_epa)
+```
+
+
+```{r}
+team_o_epa_list <- c()
+team_d_epa_list <- c()
+for (number in 1:8597){
+  team_o_epa_list <- append(team_o_epa_list, team_season_data_final$offensive_epa[[number]])
+  team_d_epa_list <- append(team_d_epa_list, team_season_data_final$defensive_epa[[number]])
+}
+team_season_data_final$offensive_epa <- team_o_epa_list
+team_season_data_final$defensive_epa <- team_d_epa_list
+```
+
+
+```{r}
+seasonal_breakdowns <- team_season_data_final |>
+  mutate(position = ifelse(position == "DE", "ED", position)) |>
+  mutate(team_season_id = paste(team, as.character(season), sep = "")) |>
+  mutate(QB = ifelse(position == "QB", total_cap_pct, 0)) |>
+  mutate(RB = ifelse(position == "RB", total_cap_pct, 0)) |>
+  mutate(WR = ifelse(position == "WR", total_cap_pct, 0)) |>
+  mutate(TE = ifelse(position == "TE", total_cap_pct, 0)) |>
+  mutate(LT = ifelse(position == "LT", total_cap_pct, 0)) |>
+  mutate(LG = ifelse(position == "LG", total_cap_pct, 0)) |>
+  mutate(C = ifelse(position == "C", total_cap_pct, 0)) |>
+  mutate(RG = ifelse(position == "RG", total_cap_pct, 0)) |>
+  mutate(RT = ifelse(position == "RT", total_cap_pct, 0)) |>
+  mutate(FB = ifelse(position == "FB", total_cap_pct, 0)) |>
+  mutate(ED = ifelse(position == "ED", total_cap_pct, 0)) |>
+  mutate(IDL = ifelse(position == "IDL", total_cap_pct, 0)) |>
+  mutate(LB = ifelse(position == "LB", total_cap_pct, 0)) |>
+  mutate(CB = ifelse(position == "CB", total_cap_pct, 0)) |>
+  mutate(S = ifelse(position == "S", total_cap_pct, 0)) |>
+  mutate(K = ifelse(position == "K", total_cap_pct, 0)) |>
+  mutate(P = ifelse(position == "P", total_cap_pct, 0)) |>
+  mutate(LS = ifelse(position == "LS", total_cap_pct, 0)) |>
+  group_by(team_season_id) |> 
+  mutate(QB = max(QB), RB = max(RB), FB = max(FB), WR = max(WR), TE = max(TE), 
+            LT = max(LT), LG = max(LG), C = max(C), RG = max(RG), RT = max(RT),
+            ED = max(ED), IDL = max(IDL), LB = max(LB), CB = max(CB), S = max(S),
+            K = max(K), P = max(P), LS = max(LS)) |>
+  ungroup() |>
+  filter(season >= 2010) |>
+  mutate(wins = lapply(team_season_id, get_wins), 
+         losses = lapply(team_season_id, get_losses))
+           
+```
+
+
+
+
+
