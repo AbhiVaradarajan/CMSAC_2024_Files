@@ -1,0 +1,1 @@
+The RMD files in this repository are meant to be run in the order of the numbers in parentheses in the file names. The PDF document is the paper containing the methodology and analysis behind the contents of the code.
